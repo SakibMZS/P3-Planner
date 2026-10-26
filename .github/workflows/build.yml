@@ -1,0 +1,55 @@
+name: Build P-3 Planner APK & Web
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 for Android Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Generate Android & Web Platform Scaffolding
+        run: |
+          flutter create --project-name p3_planner --org com.rfl.p3planner .
+          flutter pub get
+
+      - name: Enable Internet Permission in AndroidManifest
+        run: |
+          sed -i '/<application/i <uses-permission android:name="android.permission.INTERNET"/>' android/app/src/main/AndroidManifest.xml
+
+      - name: Build Release Android APK
+        run: flutter build apk --release
+
+      - name: Upload P-3 Planner Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: P3-Planner-Android-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Build Web Preview
+        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+
+      - name: Deploy Live Web App to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web

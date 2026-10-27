@@ -89,25 +89,39 @@ class StatusOption {
   const StatusOption(this.code, this.label, this.manpower, this.color, this.isRunning);
 }
 
-const List<StatusOption> kStatusOptions = [
-  StatusOption('0.33', '0.33', 0.3333, Color(0xFF10B981), true),
-  StatusOption('0.5', '0.5', 0.5000, Color(0xFF10B981), true),
-  StatusOption('1', '1', 1.0000, Color(0xFF10B981), true),
-  StatusOption('2', '2', 2.0000, Color(0xFF10B981), true),
-  StatusOption('3', '3', 3.0000, Color(0xFF10B981), true),
-  StatusOption('Sample', 'Sample', 0.0, Color(0xFF06B6D4), false),
-  StatusOption('MPS', 'MPS', 0.0, Color(0xFFF59E0B), false),
-  StatusOption('Mold Change', 'Mold Change', 0.0, Color(0xFFF59E0B), false),
-  StatusOption('Mold Problem', 'Mold Prob', 0.0, Color(0xFFEF4444), false),
-  StatusOption('Machine Problem', 'MC Prob', 0.0, Color(0xFFEF4444), false),
-  StatusOption('NO', 'NO', 0.0, Color(0xFF64748B), false),
+const List<StatusOption> kRunningOptions = [
+  StatusOption('0.33', '0.33 Op', 0.3333, Color(0xFF10B981), true),
+  StatusOption('0.5', '0.5 Op', 0.5000, Color(0xFF10B981), true),
+  StatusOption('1', '1 Op', 1.0000, Color(0xFF10B981), true),
+  StatusOption('2', '2 Op', 2.0000, Color(0xFF10B981), true),
+  StatusOption('3', '3 Op', 3.0000, Color(0xFF10B981), true),
+];
+
+const List<String> kOffReasons = [
+  'No Demand',
+  'Manpower Short*',
+  'Machine Problem*',
+  'Sample + Mold Test (RND)*',
+  'Mold Change*',
+  'Product Jam*',
+  'Color Change*',
+  'Material Shortage*',
+  'Mold Problem*',
+  'Holiday*',
+  'One Machine Idle for Another Machine (Announced)',
+  'Others',
 ];
 
 StatusOption getStatusMeta(String? code) {
-  return kStatusOptions.firstWhere(
-    (s) => s.code == code,
-    orElse: () => const StatusOption('UNSET', 'Unset', 0.0, Color(0xFF374151), false),
-  );
+  if (code == null || code.isEmpty) {
+    return const StatusOption('UNSET', 'Unset', 0.0, Color(0xFF374151), false);
+  }
+  // Check if it's a running manpower value
+  for (final opt in kRunningOptions) {
+    if (opt.code == code) return opt;
+  }
+  // Otherwise it's an OFF reason code
+  return StatusOption(code, code, 0.0, const Color(0xFFEF4444), false);
 }
 
 String formatManpower(double val) {
@@ -156,7 +170,6 @@ class _LoginScreenState extends State<LoginScreen> {
           .single();
 
       if (res['pin_code'].toString() == _pinController.text.trim()) {
-        // Trigger 30-day auto cleanup silently
         Supabase.instance.client.rpc('cleanup_old_p3_data').catchError((_) {});
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
@@ -506,7 +519,7 @@ class _MainWorkspaceState extends State<MainWorkspace> {
 
   int get _roundedMcOperatorCount => _totalMcManpower.round();
 
-  Future<void> _setMachineStatus(Map<String, dynamic> mc, StatusOption opt) async {
+  Future<void> _updateMachinePlan(Map<String, dynamic> mc, String statusCode, double manpowerVal) async {
     final lineName = mc['line_name'];
     final isIncharge = widget.user['role'] == 'INCHARGE';
     if (!isIncharge && (_lineLocks[lineName] == true)) {
@@ -523,8 +536,8 @@ class _MainWorkspaceState extends State<MainWorkspace> {
       'shift': _selectedShift,
       'mc_position': mc['mc_position'],
       'line_name': lineName,
-      'status_code': opt.code,
-      'manpower_value': opt.manpower,
+      'status_code': statusCode,
+      'manpower_value': manpowerVal,
       'updated_by': widget.user['user_id'],
       'updated_at': DateTime.now().toIso8601String(),
     };
@@ -697,7 +710,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
           ],
         ),
         actions: [
-          // Shift Toggle A / B
           TextButton.icon(
             onPressed: () {
               setState(() {
@@ -710,7 +722,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
                 style: const TextStyle(
                     color: Color(0xFF06B6D4), fontWeight: FontWeight.bold)),
           ),
-          // Date Picker
           IconButton(
             icon: const Icon(Icons.calendar_today, size: 19),
             onPressed: () async {
@@ -870,7 +881,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // Top 4 Industrial KPI Cards
         GridView.count(
           crossAxisCount: MediaQuery.of(context).size.width > 700 ? 4 : 2,
           shrinkWrap: true,
@@ -891,7 +901,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
         ),
         const SizedBox(height: 20),
 
-        // 5-Line Submission Tracker
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -975,7 +984,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
         ),
         const SizedBox(height: 16),
 
-        // Stoppage & Status Breakdown
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -986,7 +994,7 @@ class _MainWorkspaceState extends State<MainWorkspace> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('STOPPAGE & RUNNING DISTRIBUTION',
+              const Text('STATUS & REASON BREAKDOWN',
                   style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
@@ -996,20 +1004,20 @@ class _MainWorkspaceState extends State<MainWorkspace> {
               Wrap(
                 spacing: 10,
                 runSpacing: 10,
-                children: kStatusOptions.map((opt) {
-                  final count = statusCounts[opt.code] ?? 0;
+                children: statusCounts.entries.map((entry) {
+                  final meta = getStatusMeta(entry.key);
                   return Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: opt.color.withOpacity(0.12),
+                      color: meta.color.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: opt.color.withOpacity(0.4)),
+                      border: Border.all(color: meta.color.withOpacity(0.4)),
                     ),
                     child: Text(
-                      '${opt.label}: $count',
+                      '${entry.key}: ${entry.value}',
                       style: TextStyle(
-                          color: opt.color,
+                          color: meta.color,
                           fontWeight: FontWeight.bold,
                           fontSize: 13),
                     ),
@@ -1021,7 +1029,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
         ),
         const SizedBox(height: 20),
 
-        // 1-Tap WhatsApp Report Copy
         ElevatedButton.icon(
           onPressed: _copyWhatsAppSummary,
           icon: const Icon(Icons.copy, color: Colors.black),
@@ -1088,7 +1095,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
 
     return Column(
       children: [
-        // Top Line Control Bar
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: const BoxDecoration(
@@ -1154,7 +1160,6 @@ class _MainWorkspaceState extends State<MainWorkspace> {
           ),
         ),
 
-        // Machine Cards List
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.all(12),
@@ -1163,13 +1168,11 @@ class _MainWorkspaceState extends State<MainWorkspace> {
               final mc = lineMcs[idx];
               final plan = _plansByMc[mc['mc_position']];
               final selectedCode = plan?['status_code'] as String?;
-              final meta = getStatusMeta(selectedCode);
 
               return _MachinePlanCard(
                 mc: mc,
                 selectedCode: selectedCode,
-                meta: meta,
-                onSelect: (opt) => _setMachineStatus(mc, opt),
+                onUpdate: (code, mp) => _updateMachinePlan(mc, code, mp),
               );
             },
           ),
@@ -1416,19 +1419,17 @@ class _MainWorkspaceState extends State<MainWorkspace> {
 }
 
 // ============================================================================
-// EXPANDABLE MACHINE CARD (WITH HIDDEN SMART MANU CODE)
+// EXPANDABLE MACHINE CARD WITH RUNNING / OFF CONDITIONAL DROPDOWNS
 // ============================================================================
 class _MachinePlanCard extends StatefulWidget {
   final Map<String, dynamic> mc;
   final String? selectedCode;
-  final StatusOption meta;
-  final ValueChanged<StatusOption> onSelect;
+  final Function(String code, double manpower) onUpdate;
 
   const _MachinePlanCard({
     required this.mc,
     required this.selectedCode,
-    required this.meta,
-    required this.onSelect,
+    required this.onUpdate,
   });
 
   @override
@@ -1440,6 +1441,13 @@ class _MachinePlanCardState extends State<_MachinePlanCard> {
 
   @override
   Widget build(BuildContext context) {
+    final meta = getStatusMeta(widget.selectedCode);
+    // Determine main mode: 'RUNNING', 'OFF', or null (unset)
+    String? currentMode;
+    if (widget.selectedCode != null) {
+      currentMode = meta.isRunning ? 'RUNNING' : 'OFF';
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
@@ -1448,7 +1456,7 @@ class _MachinePlanCardState extends State<_MachinePlanCard> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: widget.selectedCode != null
-              ? widget.meta.color.withOpacity(0.55)
+              ? meta.color.withOpacity(0.55)
               : const Color(0xFF1F2937),
           width: 1.4,
         ),
@@ -1498,51 +1506,147 @@ class _MachinePlanCardState extends State<_MachinePlanCard> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: widget.meta.color.withOpacity(0.18),
+                  color: meta.color.withOpacity(0.18),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  widget.meta.label,
+                  meta.label,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: widget.meta.color,
+                    color: meta.color,
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: kStatusOptions.map((opt) {
-              final active = widget.selectedCode == opt.code;
-              return InkWell(
-                onTap: () => widget.onSelect(opt),
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: active ? opt.color : const Color(0xFF0B0F19),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: active ? opt.color : const Color(0xFF1F2937),
+          const SizedBox(height: 12),
+          // Step 1: Running vs OFF Toggle Buttons
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    // Default to '1' operator when switching to Running if previously OFF or unset
+                    if (currentMode != 'RUNNING') {
+                      widget.onUpdate('1', 1.0);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: currentMode == 'RUNNING'
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFF0B0F19),
+                    foregroundColor: currentMode == 'RUNNING'
+                        ? Colors.black
+                        : const Color(0xFFD1D5DB),
+                    side: BorderSide(
+                      color: currentMode == 'RUNNING'
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFF1F2937),
                     ),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                   ),
-                  child: Text(
-                    opt.label,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: active ? Colors.black : const Color(0xFFD1D5DB),
-                    ),
-                  ),
+                  child: const Text('RUNNING',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
-              );
-            }).toList(),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    // Default to first OFF reason ('No Demand') when switching to OFF
+                    if (currentMode != 'OFF') {
+                      widget.onUpdate(kOffReasons[0], 0.0);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: currentMode == 'OFF'
+                        ? const Color(0xFFEF4444)
+                        : const Color(0xFF0B0F19),
+                    foregroundColor: currentMode == 'OFF'
+                        ? Colors.black
+                        : const Color(0xFFD1D5DB),
+                    side: BorderSide(
+                      color: currentMode == 'OFF'
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFF1F2937),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text('OFF',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
           ),
+          // Step 2: Conditional Dropdown based on Running vs OFF selection
+          if (currentMode == 'RUNNING') ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: kRunningOptions.any((o) => o.code == widget.selectedCode)
+                  ? widget.selectedCode
+                  : '1',
+              dropdownColor: const Color(0xFF1F2937),
+              decoration: InputDecoration(
+                labelText: 'Allocated Manpower',
+                labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                filled: true,
+                fillColor: const Color(0xFF0B0F19),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Color(0xFF1F2937)),
+                ),
+              ),
+              items: kRunningOptions
+                  .map((opt) => DropdownMenuItem(
+                        value: opt.code,
+                        child: Text('${opt.label} Operator',
+                            style: const TextStyle(fontSize: 13)),
+                      ))
+                  .toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  final opt = kRunningOptions.firstWhere((o) => o.code == val);
+                  widget.onUpdate(opt.code, opt.manpower);
+                }
+              },
+            ),
+          ] else if (currentMode == 'OFF') ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: kOffReasons.contains(widget.selectedCode)
+                  ? widget.selectedCode
+                  : kOffReasons[0],
+              dropdownColor: const Color(0xFF1F2937),
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'OFF / Stoppage Reason',
+                labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                filled: true,
+                fillColor: const Color(0xFF0B0F19),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Color(0xFF1F2937)),
+                ),
+              ),
+              items: kOffReasons
+                  .map((reason) => DropdownMenuItem(
+                        value: reason,
+                        child: Text(reason,
+                            style: const TextStyle(fontSize: 13)),
+                      ))
+                  .toList(),
+              onChanged: (val) {
+                if (val != null) {
+                  widget.onUpdate(val, 0.0);
+                }
+              },
+            ),
+          ],
         ],
       ),
     );
